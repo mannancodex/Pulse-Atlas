@@ -128,7 +128,7 @@ def pack(i):
             "published": i["dt"].isoformat()}
 
 
-@app.get("/api/news")
+@app.get("https://pulse-atlas.onrender.com/")
 def news(name: str, country: str = "", cc: str = "US", state: str = "", scope: str = "city"):
     if scope not in ("city", "state", "country"):
         raise HTTPException(400, "bad scope")
@@ -155,7 +155,7 @@ def news(name: str, country: str = "", cc: str = "US", state: str = "", scope: s
     return data
 
 
-@app.get("/api/summary")
+@app.get("https://pulse-atlas.onrender.com/")
 def summary(key: str, cat: str):
     hit = CACHE.get(key)
     if not hit or cat not in hit["titles"]:
