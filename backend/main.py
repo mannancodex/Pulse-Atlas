@@ -1,17 +1,23 @@
-"""Pulse Atlas API: hover/click a region -> live categorised news, meaningful trend shares, transformer summaries."""
-import re, time, threading
+
+"""Pulse Atlas API: live categorised news, topic trends, and summaries."""
+
+import re
+import time
+import threading
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from urllib.parse import quote_plus
 
-import feedparser, requests
+import feedparser
+import requests
 from fastapi import FastAPI, HTTPException
-from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 UA = {"User-Agent": "pulse-atlas-demo/1.0 (student project)"}
+
 CATS = {
     "Politics": "politics OR government OR election",
     "Business": "business OR economy OR market",
@@ -22,148 +28,362 @@ CATS = {
     "Entertainment": "entertainment OR film OR music",
     "Science": "science OR research OR space",
 }
+
 STOP = set("""the a an of in on to for and or with at by from as is are was were be this that it its after over new says
 say more amid into about up out how what why who will has have not no vs us can may could would than their his her you
 your our one two first last year years day days today live news here there when where while during before under
 january february march april may june july august september october november december monday tuesday wednesday thursday
 friday saturday sunday""".split())
-ENT = re.compile(r"[A-Z][A-Za-z0-9'’&.-]+(?:\s[A-Z][A-Za-z0-9'’&.-]+){0,2}")
-CACHE, LOCK, TTL = {}, threading.Lock(), 600
-app = FastAPI(title="Pulse Atlas")
 
+ENT = re.compile(
+    r"[A-Z][A-Za-z0-9'’&.-]+(?:\s[A-Z][A-Za-z0-9'’&.-]+){0,2}"
+)
+
+CACHE = {}
+LOCK = threading.RLock()
+TTL = 600
+
+app = FastAPI(title="Pulse Atlas API")
+
+# Allow your GitHub Pages frontend to call this API.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://mannancodex.github.io",
-    ],
+    allow_origins=["https://mannancodex.github.io"],
     allow_credentials=False,
-    allow_methods=["*"],
+    allow_methods=["GET"],
     allow_headers=["*"],
 )
 
+
 def parse_feed(url):
-    feed = feedparser.parse(requests.get(url, headers=UA, timeout=12).content)
-    out, seen = [], set()
-    for e in feed.entries:
-        title = re.sub(r"\s+-\s+[^-]+$", "", e.get("title", "")).strip()
-        if not title or title.lower() in seen or not e.get("published_parsed"):
+    response = requests.get(url, headers=UA, timeout=12)
+    response.raise_for_status()
+
+    feed = feedparser.parse(response.content)
+    out = []
+    seen = set()
+
+    for entry in feed.entries:
+        title = re.sub(r"\s+-\s+[^-]+$", "", entry.get("title", "")).strip()
+
+        if (
+            not title
+            or title.lower() in seen
+            or not entry.get("published_parsed")
+        ):
             continue
+
         seen.add(title.lower())
-        src = e.get("source") or {}
-        out.append({"title": title, "link": e.link, "source": src.get("title", ""), "source_url": src.get("href", ""),
-                    "dt": datetime(*e.published_parsed[:6], tzinfo=timezone.utc)})
-    return sorted(out, key=lambda x: x["dt"], reverse=True)
+        source = entry.get("source") or {}
+
+        out.append({
+            "title": title,
+            "link": entry.get("link", ""),
+            "source": source.get("title", ""),
+            "source_url": source.get("href", ""),
+            "dt": datetime(
+                *entry.published_parsed[:6],
+                tzinfo=timezone.utc,
+            ),
+        })
+
+    return sorted(out, key=lambda item: item["dt"], reverse=True)
 
 
 def fetch_cat(cat, places, cc):
-    """Google News RSS search; widen city -> state -> country until >= 10 stories."""
-    items, used = [], places[0]
-    for p in places:
-        q = quote_plus(f'({CATS[cat]}) "{p}" when:7d')
-        for loc in (f"hl=en-{cc}&gl={cc}&ceid={cc}:en", "hl=en-US&gl=US&ceid=US:en"):
+    """Search Google News, widening the location when necessary."""
+    items = []
+    used = places[0]
+
+    for place in places:
+        query = quote_plus(f'({CATS[cat]}) "{place}" when:7d')
+
+        urls = [
+            f"https://news.google.com/rss/search?q={query}"
+            f"&hl=en-{cc}&gl={cc}&ceid={cc}:en",
+            f"https://news.google.com/rss/search?q={query}"
+            "&hl=en-US&gl=US&ceid=US:en",
+        ]
+
+        for url in urls:
             try:
-                items = parse_feed(f"https://news.google.com/rss/search?q={q}&{loc}")
+                items = parse_feed(url)
             except Exception:
                 items = []
+
             if items:
                 break
-        used = p
+
+        used = place
+
         if len(items) >= 10:
             break
+
     return cat, items, used
 
 
 def entities(title, exclude):
-    out = []
-    for m in ENT.findall(title):
-        w = m.split()
-        while w and w[0].lower() in STOP:
-            w = w[1:]
-        t = " ".join(w)
-        if len(t) >= 3 and t.lower() not in STOP and t.lower() not in exclude:
-            out.append(t)
-    return out
+    found = []
+
+    for match in ENT.findall(title):
+        words = match.split()
+
+        while words and words[0].lower() in STOP:
+            words = words[1:]
+
+        topic = " ".join(words)
+
+        if len(topic) >= 3 and topic.lower() not in STOP:
+            if topic.lower() not in exclude:
+                found.append(topic)
+
+    return found
 
 
 def topics(items, exclude, top=6):
-    """Share = % of stories in the current window that mention the topic.
-    Change = percentage-point difference vs the previous window of equal length (24h, or 72h if the feed is sparse)."""
+    """Calculate topic shares and percentage-point changes."""
     now = datetime.now(timezone.utc)
-    age = lambda i: now - i["dt"]
-    W = 24 if sum(1 for i in items if age(i) <= timedelta(hours=24)) >= 8 else 72
-    cur = [i for i in items if age(i) <= timedelta(hours=W)]
-    prev = [i for i in items if timedelta(hours=W) < age(i) <= timedelta(hours=2 * W)]
-    count = lambda arr: Counter(t for i in arr for t in set(entities(i["title"], exclude)))
-    cc, pc = count(cur), count(prev)
-    out = []
-    for t, n in cc.most_common(25):
-        if n < 2:
+
+    def age(item):
+        return now - item["dt"]
+
+    recent_24h = sum(
+        age(item) <= timedelta(hours=24) for item in items
+    )
+
+    window = 24 if recent_24h >= 8 else 72
+
+    current = [
+        item for item in items
+        if age(item) <= timedelta(hours=window)
+    ]
+
+    previous = [
+        item for item in items
+        if timedelta(hours=window) < age(item)
+        <= timedelta(hours=2 * window)
+    ]
+
+    def count_topics(items_list):
+        return Counter(
+            topic
+            for item in items_list
+            for topic in set(entities(item["title"], exclude))
+        )
+
+    current_counts = count_topics(current)
+    previous_counts = count_topics(previous)
+
+    result = []
+
+    for topic, count in current_counts.most_common(25):
+        if count < 2:
             break
-        share = round(n / len(cur) * 100)
-        delta = round(share - pc[t] / len(prev) * 100) if prev else None
-        out.append({"t": t, "n": n, "share": share, "delta": delta, "new": bool(prev) and pc[t] == 0})
-    return {"window": W, "base": len(cur), "list": out[:top]}
+
+        share = round(count / len(current) * 100)
+
+        delta = (
+            round(
+                share
+                - previous_counts[topic] / len(previous) * 100
+            )
+            if previous
+            else None
+        )
+
+        result.append({
+            "t": topic,
+            "n": count,
+            "share": share,
+            "delta": delta,
+            "new": bool(previous) and previous_counts[topic] == 0,
+        })
+
+    return {
+        "window": window,
+        "base": len(current),
+        "list": result[:top],
+    }
 
 
 _pipe = None
+
+
 def summarize(titles):
+    """Generate a transformer summary, falling back to the first headline."""
     global _pipe
+
     if _pipe is None:
         try:
             from transformers import pipeline
-            _pipe = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
+
+            _pipe = pipeline(
+                "summarization",
+                model="sshleifer/distilbart-cnn-12-6",
+            )
         except Exception:
             _pipe = False
+
     text = ". ".join(titles[:15])
-    if _pipe:
+
+    if _pipe and text:
         try:
-            return _pipe(text[:3000], max_length=70, min_length=25, do_sample=False, truncation=True)[0]["summary_text"]
+            return _pipe(
+                text[:3000],
+                max_length=70,
+                min_length=25,
+                do_sample=False,
+                truncation=True,
+            )[0]["summary_text"]
         except Exception:
             pass
-    return titles[0] if titles else ""
+
+    return titles[0] if titles else "No recent headlines are available."
 
 
-def pack(i):
-    return {"title": i["title"], "link": i["link"], "source": i["source"], "source_url": i["source_url"],
-            "published": i["dt"].isoformat()}
+def pack(item):
+    return {
+        "title": item["title"],
+        "link": item["link"],
+        "source": item["source"],
+        "source_url": item["source_url"],
+        "published": item["dt"].isoformat(),
+    }
 
 
-@app.get("https://pulse-atlas.onrender.com/")
-def news(name: str, country: str = "", cc: str = "US", state: str = "", scope: str = "city"):
+# FIX 1: Use an API path, not the full Render URL.
+@app.get("/api/news")
+def news(
+    name: str,
+    country: str = "",
+    cc: str = "US",
+    state: str = "",
+    scope: str = "city",
+):
     if scope not in ("city", "state", "country"):
-        raise HTTPException(400, "bad scope")
-    name = name.replace('"', "")
+        raise HTTPException(status_code=400, detail="Invalid scope.")
+
+    name = name.replace('"', "").strip()
+    country = country.replace('"', "").strip()
+    state = state.replace('"', "").strip()
+
+    cc = cc.upper() if re.fullmatch(r"[A-Za-z]{2}", cc or "") else "US"
+
     key = f"{scope}:{name}:{cc}"
-    hit = CACHE.get(key)
-    if hit and time.time() - hit["t"] < TTL:
-        return hit["data"]
-    places = [name, state, country] if scope == "city" else [name, country] if scope == "state" else [name]
-    places = list(dict.fromkeys(p.replace('"', "") for p in places if p))
-    cc = cc if re.fullmatch(r"[A-Za-z]{2}", cc or "") else "US"
-    with ThreadPoolExecutor(8) as ex:
-        results = list(ex.map(lambda c: fetch_cat(c, places, cc.upper()), CATS))
-    exclude = {p.lower() for p in places}
-    allitems = {i["title"]: i for _, items, _ in results for i in items}
-    merged = sorted(allitems.values(), key=lambda x: x["dt"], reverse=True)
-    cats = [{"name": cat, "widened": used if used != name else "", "topics": topics(items, exclude),
-             "items": [pack(i) for i in items[:10]]} for cat, items, used in results]
-    data = {"key": key, "place": name, "country": country, "scope": scope, "total": len(merged),
-            "top": [pack(i) for i in merged[:12]], "topics": topics(merged, exclude, 8), "categories": cats}
-    titles = {cat: [i["title"] for i in items] for cat, items, _ in results}
-    titles["Top"] = [i["title"] for i in merged]
-    CACHE[key] = {"t": time.time(), "data": data, "titles": titles, "sums": {}}
+
+    with LOCK:
+        cached = CACHE.get(key)
+
+        if cached and time.time() - cached["t"] < TTL:
+            return cached["data"]
+
+    if scope == "city":
+        places = [name, state, country]
+    elif scope == "state":
+        places = [name, country]
+    else:
+        places = [name]
+
+    places = list(dict.fromkeys(place for place in places if place))
+
+    if not places:
+        raise HTTPException(status_code=400, detail="A location name is required.")
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(
+            executor.map(
+                lambda category: fetch_cat(category, places, cc),
+                CATS,
+            )
+        )
+
+    excluded = {place.lower() for place in places}
+
+    all_items = {
+        item["title"]: item
+        for _, items, _ in results
+        for item in items
+    }
+
+    merged = sorted(
+        all_items.values(),
+        key=lambda item: item["dt"],
+        reverse=True,
+    )
+
+    categories = [
+        {
+            "name": category,
+            "widened": used if used != name else "",
+            "topics": topics(items, excluded),
+            "items": [pack(item) for item in items[:10]],
+        }
+        for category, items, used in results
+    ]
+
+    data = {
+        "key": key,
+        "place": name,
+        "country": country,
+        "scope": scope,
+        "total": len(merged),
+        "top": [pack(item) for item in merged[:12]],
+        "topics": topics(merged, excluded, 8),
+        "categories": categories,
+    }
+
+    titles = {
+        category: [item["title"] for item in items]
+        for category, items, _ in results
+    }
+    titles["Top"] = [item["title"] for item in merged]
+
+    with LOCK:
+        CACHE[key] = {
+            "t": time.time(),
+            "data": data,
+            "titles": titles,
+            "sums": {},
+        }
+
     return data
 
 
-@app.get("https://pulse-atlas.onrender.com/")
+# FIX 2: Give summaries their own API path.
+@app.get("/api/summary")
 def summary(key: str, cat: str):
-    hit = CACHE.get(key)
-    if not hit or cat not in hit["titles"]:
-        raise HTTPException(404, "Unknown region; reselect it on the map.")
-    if cat not in hit["sums"]:
-        with LOCK:
-            hit["sums"][cat] = summarize(hit["titles"][cat])
-    return {"summary": hit["sums"][cat]}
+    with LOCK:
+        cached = CACHE.get(key)
+
+        if not cached or cat not in cached["titles"]:
+            raise HTTPException(
+                status_code=404,
+                detail="Unknown region; reselect it on the map.",
+            )
+
+        if cat in cached["sums"]:
+            return {"summary": cached["sums"][cat]}
+
+        titles = cached["titles"][cat]
+
+    generated_summary = summarize(titles)
+
+    with LOCK:
+        # Cache may have been refreshed while summarization ran.
+        current = CACHE.get(key)
+
+        if current and cat in current["titles"]:
+            current["sums"][cat] = generated_summary
+
+    return {"summary": generated_summary}
 
 
-app.mount("/", StaticFiles(directory=Path(__file__).resolve().parent.parent / "frontend", html=True))
+# Keep this last so API routes are registered before the static frontend.
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+
+if FRONTEND_DIR.exists():
+    app.mount(
+        "/",
+        StaticFiles(directory=FRONTEND_DIR, html=True),
+        name="frontend",
+    )
