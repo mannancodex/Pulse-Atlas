@@ -9,6 +9,7 @@ from urllib.parse import quote_plus
 import feedparser, requests
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 
 UA = {"User-Agent": "pulse-atlas-demo/1.0 (student project)"}
 CATS = {
@@ -30,6 +31,15 @@ ENT = re.compile(r"[A-Z][A-Za-z0-9'’&.-]+(?:\s[A-Z][A-Za-z0-9'’&.-]+){0,2}")
 CACHE, LOCK, TTL = {}, threading.Lock(), 600
 app = FastAPI(title="Pulse Atlas")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://mannancodex.github.io",
+    ],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 def parse_feed(url):
     feed = feedparser.parse(requests.get(url, headers=UA, timeout=12).content)
