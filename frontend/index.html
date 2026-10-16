@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pulse Atlas</title>
+<link rel="stylesheet" href="vendor/leaflet.css">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#fff;--sub:#f1f3f4;--line:#dadce0;--ink:#202124;--mute:#5f6368;--accent:#1a73e8;--hover:#8ab4f8;--land:#e3e6ea;--edge:#fff;--sea:#f6f9fe;--city:#80868b;--up:#188038;--down:#d93025;color-scheme:light}
+@media(prefers-color-scheme:dark){:root{--bg:#202124;--sub:#2d2e31;--line:#3c4043;--ink:#e8eaed;--mute:#9aa0a6;--accent:#8ab4f8;--hover:#4f7fcf;--land:#3a3b3f;--edge:#202124;--sea:#161718;--city:#9aa0a6;--up:#81c995;--down:#f28b82;color-scheme:dark}}
+*{box-sizing:border-box;margin:0}
+body{height:100dvh;display:flex;flex-direction:column;background:var(--bg);color:var(--ink);font:14px/1.45 Inter,system-ui,sans-serif}
+header{display:flex;align-items:center;gap:16px;padding:10px 20px;border-bottom:1px solid var(--line)}
+.logo{font-weight:700;font-size:20px;letter-spacing:-.02em}.logo i{color:var(--accent);font-style:normal}
+#q{flex:1;max-width:420px;border:0;background:var(--sub);color:var(--ink);border-radius:99px;padding:10px 18px;font:inherit}
+.seg{display:flex;background:var(--sub);border-radius:99px;padding:3px;margin-left:auto}
+button{font:500 13px Inter,sans-serif;cursor:pointer;border:0;background:none;color:var(--ink)}
+.seg button{padding:7px 16px;border-radius:99px}.seg button.on{background:var(--accent);color:#fff}
+main{flex:1;display:grid;grid-template-columns:minmax(360px,42%) 1fr;min-height:0}
+#mapw{position:relative;border-right:1px solid var(--line)}
+#map{position:absolute;inset:0;background:var(--sea)}
+#tip{position:absolute;display:none;z-index:500;pointer-events:none;background:var(--ink);color:var(--bg);padding:5px 11px;border-radius:8px;font-weight:600;font-size:13px;white-space:nowrap}
+#hint{position:absolute;left:12px;bottom:12px;z-index:500;background:var(--bg);border:1px solid var(--line);border-radius:99px;padding:6px 14px;font-size:12px;color:var(--mute)}
+.leaflet-control-zoom a{background:var(--bg)!important;color:var(--ink)!important;border-color:var(--line)!important}
+#pane{overflow:auto;position:relative}
+.empty{padding:80px 40px;text-align:center;color:var(--mute)}.empty h2{color:var(--ink);font-size:26px;letter-spacing:-.02em;margin-bottom:8px}
+.hd{padding:18px 24px 0;position:sticky;top:0;background:var(--bg);z-index:5}
+.hd h1{font-size:28px;letter-spacing:-.02em;line-height:1.1}.hd span{color:var(--mute)}
+.tabs{display:flex;gap:4px;overflow-x:auto;margin:12px -24px 0;padding:0 24px;border-bottom:1px solid var(--line)}
+.tabs button{padding:10px 14px;white-space:nowrap;color:var(--mute);border-bottom:3px solid transparent}
+.tabs button.on{color:var(--c);border-color:var(--c);font-weight:600}
+#body{padding:18px 24px 40px}
+.sum{background:var(--sub);border-radius:16px;padding:14px 18px;margin-bottom:22px}.sum b{font-size:12px;color:var(--accent);letter-spacing:.04em}
+.sum p{margin-top:4px;font-size:15px}
+.sh{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px}.sh h3{font-size:17px}.sh small{color:var(--mute);font-size:12px;max-width:60%;text-align:right}
+.tg{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px;margin-bottom:26px}
+.tile{border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+.tn{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pc{font-size:30px;font-weight:700;letter-spacing:-.03em;line-height:1.2;color:var(--c)}
+.bar{height:5px;background:var(--sub);border-radius:9px;overflow:hidden;margin:6px 0}.bar i{display:block;height:100%;background:var(--c);border-radius:9px}
+.tm{font-size:12px;color:var(--mute)}.u{color:var(--up);font-weight:600}.d{color:var(--down);font-weight:600}
+.lead{display:block;text-decoration:none;color:#fff;border-radius:18px;padding:24px;min-height:190px;margin-bottom:12px;background:linear-gradient(135deg,var(--c),#202124 140%);display:flex;flex-direction:column;justify-content:flex-end;transition:.15s}
+.lead:hover{filter:brightness(1.08)}.lead .cat{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;opacity:.85}
+.lead h3{font-size:24px;line-height:1.2;letter-spacing:-.02em;margin:6px 0 10px}.lead p{font-size:12px;opacity:.9;display:flex;align-items:center;gap:6px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
+.st{display:block;text-decoration:none;color:var(--ink);border:1px solid var(--line);border-left:4px solid var(--c);border-radius:12px;padding:12px 14px;transition:.15s}
+.st:hover{background:var(--sub)}.st h4{font-size:15px;line-height:1.3;font-weight:600;margin:6px 0}
+.sr,.tm.sr{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--mute)}
+.sr img{width:16px;height:16px;border-radius:4px}.lead img{width:16px;height:16px;border-radius:4px;background:#fff}
+.foot{margin-top:22px;font-size:12px;color:var(--mute)}
+.sk{background:linear-gradient(90deg,var(--sub),var(--line),var(--sub));background-size:200%;animation:s 1.2s infinite;border-radius:10px;height:16px;margin:10px 0}@keyframes s{to{background-position:-200%}}
+@media(max-width:900px){main{grid-template-columns:1fr;grid-template-rows:40dvh 1fr}#mapw{border:0}header{flex-wrap:wrap}.seg{margin-left:0}}
+</style></head><body>
+<header><div class="logo">Pulse<i>.</i>Atlas</div><input id="q" placeholder="Search a city, state or country"><div class="seg" id="seg"><button data-s="city">City</button><button data-s="state">State</button><button class="on" data-s="country">Country</button></div></header>
+<main><div id="mapw"><div id="map"></div><div id="tip"></div><div id="hint"></div></div>
+<div id="pane"><div class="empty"><h2>Hover to explore, click to read</h2><p>Move over the map to highlight a region. Click it to load its news and trends.</p></div></div></main>
+<script src="vendor/leaflet.js"></script>
+<script>
+const $=s=>document.querySelector(s),esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const norm=s=>String(s).normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim();
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const CAT={Top:"#1a73e8",Politics:"#d93025",Business:"#188038",Technology:"#7b3ff2",Sports:"#e8710a",Environment:"#0b8a7a",Health:"#c2185b",Entertainment:"#b06000",Science:"#3367d6"};
+let scope="country",DATA={},base,layer,selL,selName,D,tab="Top",catOf={};const SUM={};
+const map=L.map("map",{minZoom:1,maxZoom:8,zoomSnap:.25,attributionControl:false,maxBounds:[[-60,-190],[85,190]],maxBoundsViscosity:1}).setView([22,10],1.5);
+const rend=L.canvas({padding:.5});
+const st=()=>({fillColor:css("--land"),fillOpacity:1,color:css("--edge"),weight:.7});
+const HI=()=>({fillColor:css("--hover"),fillOpacity:.75,color:css("--accent"),weight:1.5});
+const SEL=()=>({fillColor:css("--accent"),fillOpacity:.9,color:css("--accent"),weight:2});
+const T=$("#tip");
+function tip(t,e){if(t!=null)T.textContent=t;T.style.display="block";const r=$("#map").getBoundingClientRect(),o=e.originalEvent;T.style.left=o.clientX-r.left+14+"px";T.style.top=o.clientY-r.top+14+"px"}
+const label=p=>scope=="city"?`${p.name}, ${p.adm0name}`:scope=="state"?`${p.name}, ${p.admin}`:p.name;
+function hook(f,l){l.on({mouseover:e=>{if(l!==selL){l.setStyle(HI());if(l.setRadius)l.setRadius(l.options.radius+3)}l.bringToFront();tip(label(f.properties),e)},
+ mousemove:e=>tip(null,e),mouseout:()=>{if(l!==selL)layer.resetStyle(l);T.style.display="none"},click:()=>pick(f.properties,l)})}
+const minPop=z=>z<2.5?4e6:z<3.5?2e6:z<4.5?8e5:z<5.5?3e5:0;
+function buildCities(){layer&&map.removeLayer(layer);const z=map.getZoom();selL=null;
+ layer=L.geoJSON(DATA.cities,{filter:f=>f.properties.pop_max>=minPop(z),onEachFeature:hook,
+  pointToLayer:(f,ll)=>L.circleMarker(ll,{renderer:rend,radius:Math.max(4,Math.min(11,Math.log10(f.properties.pop_max)*1.7-3.5)),fillColor:css("--city"),fillOpacity:.9,color:css("--bg"),weight:1.2})}).addTo(map);
+ if(selName)layer.eachLayer(l=>{if(l.feature.properties.name===selName){selL=l;l.setStyle(SEL())}})}
+function build(){[base,layer].forEach(l=>l&&map.removeLayer(l));base=layer=selL=null;
+ if(scope!="country")base=L.geoJSON(DATA.countries,{renderer:rend,interactive:false,style:st}).addTo(map);
+ if(scope=="city")buildCities();
+ else layer=L.geoJSON(scope=="state"?DATA.states:DATA.countries,{renderer:rend,style:st,onEachFeature:hook}).addTo(map);
+ $("#hint").textContent=`Hover a ${scope} to highlight · click to open`}
+map.on("zoomend",()=>scope=="city"&&buildCities());
+function pick(p,l){if(selL&&selL!==l)layer.resetStyle(selL);selL=l;selName=p.name;l&&l.setStyle(SEL());
+ loadNews(scope=="city"?{name:p.name,country:p.adm0name,cc:p.iso_a2,state:p.adm1name}:scope=="state"?{name:p.name,country:p.admin,cc:p.iso_a2,state:""}:{name:p.name,country:p.name,cc:p.cc,state:""})}
+$("#seg").onclick=e=>{const s=e.target.dataset.s;if(!s||s==scope)return;scope=s;selName=null;
+ document.querySelectorAll("#seg button").forEach(b=>b.classList.toggle("on",b==e.target));build()};
+$("#q").onkeydown=e=>{if(e.key!="Enter")return;const n=norm(e.target.value);if(!n)return;
+ const src=DATA[scope=="city"?"cities":scope=="state"?"states":"countries"].features,nm=f=>norm(f.properties.name);
+ const f=src.find(f=>nm(f)==n)||src.find(f=>nm(f).startsWith(n))||src.find(f=>nm(f).includes(n));
+ if(!f)return e.target.select();
+ if(scope=="city"){const[x,y]=f.geometry.coordinates;selName=f.properties.name;map.setView([y,x],6);buildCities();pick(f.properties,selL)}
+ else{const l=layer.getLayers().find(l=>l.feature===f);map.fitBounds(l.getBounds(),{maxZoom:6});pick(f.properties,l)}};
+const ago=iso=>{const m=(Date.now()-new Date(iso))/6e4;return m<60?Math.max(1,Math.round(m))+"m ago":m<1440?Math.round(m/60)+"h ago":Math.round(m/1440)+"d ago"};
+const fav=u=>{try{return`<img src="https://www.google.com/s2/favicons?sz=64&domain=${new URL(u).hostname}" onerror="this.style.display='none'">`}catch{return""}};
+async function loadNews(q){$("#pane").innerHTML=`<div class="hd"><h1>${esc(q.name)}</h1><span>${esc(q.country)} · fetching live headlines…</span></div><div id="body"><div class="sk" style="height:70px"></div><div class="sk" style="height:110px"></div><div class="sk" style="height:190px"></div></div>`;
+ try{const r=await fetch("/api/news?"+new URLSearchParams({...q,scope}));if(!r.ok)throw new Error((await r.json()).detail||r.status);
+  D=await r.json();catOf={};D.categories.forEach(c=>c.items.forEach(i=>catOf[i.title]=c.name));tab="Top";shell()}
+ catch(e){$("#pane").innerHTML=`<div class="empty"><h2>Couldn't load news</h2><p>${esc(e.message)}</p></div>`}}
+function shell(){const names=["Top",...D.categories.map(c=>c.name)];
+ $("#pane").innerHTML=`<div class="hd"><h1>${esc(D.place)}</h1><span>${esc(D.country)} · ${D.total} stories this week</span>
+ <div class="tabs">${names.map(n=>`<button data-t="${n}" style="--c:${CAT[n]}" class="${n==tab?"on":""}">${n=="Top"?"Top stories":n}</button>`).join("")}</div></div><div id="body"></div>`;
+ document.querySelector(".tabs").onclick=e=>{const t=e.target.dataset.t;if(!t)return;tab=t;document.querySelectorAll(".tabs button").forEach(b=>b.classList.toggle("on",b.dataset.t==t));body()};body()}
+function body(){const C=D.categories.find(c=>c.name==tab),items=C?C.items:D.top,tp=C?C.topics:D.topics,col=CAT[tab],win=tp.window==24?"24 hours":"3 days";
+ const chip=t=>t.new?'<span class="u">New</span>':t.delta==null?"":t.delta>0?`<span class="u">▲ ${t.delta} pts</span>`:t.delta<0?`<span class="d">▼ ${-t.delta} pts</span>`:"–";
+ const card=i=>{const c=CAT[catOf[i.title]]||col;return`<a class="st" style="--c:${c}" href="${esc(i.link)}" target="_blank" rel="noopener"><div class="sr">${fav(i.source_url)}${esc(i.source||"News")}</div><h4>${esc(i.title)}</h4><div class="tm">${ago(i.published)}${tab=="Top"&&catOf[i.title]?" · "+catOf[i.title]:""}</div></a>`};
+ const [l,...rest]=items;
+ $("#body").innerHTML=`<div class="sum"><b>✦ AI SUMMARY</b><p id="sm"><span class="sk" style="display:block"></span></p></div>
+ <div class="sh"><h3>Trending topics</h3><small>% of the last ${tp.base} stories (${win}) that mention the topic · change vs the previous ${win}</small></div>
+ <div class="tg" style="--c:${col}">${tp.list.map((t,i)=>`<div class="tile"><div class="tn">${i+1}. ${esc(t.t)}</div><div class="pc">${t.share}%</div><div class="bar"><i style="width:${Math.min(100,t.share*1.5)}%"></i></div><div class="tm">${t.n} stories ${chip(t)}</div></div>`).join("")||'<p class="tm">Not enough repeated topics yet.</p>'}</div>
+ ${C&&C.widened?`<p class="tm" style="margin-bottom:10px">Few local stories, showing results for ${esc(C.widened)}.</p>`:""}
+ <div class="sh"><h3>${tab=="Top"?"Top stories":tab}</h3></div>
+ ${l?`<a class="lead" style="--c:${CAT[catOf[l.title]]||col}" href="${esc(l.link)}" target="_blank" rel="noopener"><span class="cat">${esc(catOf[l.title]||tab)}</span><h3>${esc(l.title)}</h3><p>${fav(l.source_url)}${esc(l.source||"News")} · ${ago(l.published)}</p></a><div class="grid">${rest.map(card).join("")}</div>`:'<p class="tm">No recent coverage.</p>'}
+ <p class="foot">Stories: Google News, last 7 days. Topics: names found in headlines. Summary: transformer model on the headlines.</p>`;
+ const k=D.key+tab,t0=tab,k0=D.key;
+ if(SUM[k])return $("#sm").textContent=SUM[k];
+ fetch(`/api/summary?key=${encodeURIComponent(k0)}&cat=${t0}`).then(r=>r.json()).then(j=>{SUM[k]=j.summary;if(tab==t0&&D.key==k0)$("#sm").textContent=j.summary}).catch(()=>{if(tab==t0)$("#sm").textContent="Summary unavailable."})}
+Promise.all(["countries","states","cities"].map(n=>fetch(`data/${n}.json`).then(r=>r.json().then(j=>DATA[n]=j)))).then(()=>{build();map.invalidateSize()});
+new ResizeObserver(()=>map.invalidateSize()).observe($("#mapw"));
+</script></body></html>
